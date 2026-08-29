@@ -95,9 +95,28 @@ void sideloadFull(
     }
 
     foreach (bundle; appIdsToRegister) {
-        auto appIdName = bundle.bundleName.filter!((dchar c) => c.isAlphaNum).array().to!string();
+        // Apple only allows alphanumeric characters and spaces in appIdName.
+        // Display names like 哔哩哔哩 and identifiers with dots both fail.
+        string sanitizeAppIdName(string name) {
+            char[] buf;
+            bool lastSpace = true;
+            foreach (dchar c; name) {
+                if (c < 128 && c.isAlphaNum) {
+                    buf ~= cast(char) c;
+                    lastSpace = false;
+                } else if (!lastSpace) {
+                    buf ~= ' ';
+                    lastSpace = true;
+                }
+            }
+            if (buf.length && buf[$ - 1] == ' ') {
+                buf = buf[0 .. $ - 1];
+            }
+            return buf.idup;
+        }
+        auto appIdName = sanitizeAppIdName(bundle.bundleName);
         if (appIdName.length == 0) {
-            appIdName = bundle.bundleIdentifier;
+            appIdName = sanitizeAppIdName(bundle.bundleIdentifier);
         }
         log.infoF!"Creating App ID `%s` for the bundle `%s`..."(appIdName, bundle.bundleIdentifier);
         developer.addAppId!iOS(team, bundle.bundleIdentifier, appIdName).unwrap();
