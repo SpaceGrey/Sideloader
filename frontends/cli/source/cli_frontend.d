@@ -99,19 +99,76 @@ string readPasswordLine(string prompt) {
     }
 }
 
-DeveloperSession login(Device device, ADI adi, bool interactive) {
+string accountSessionPath(string configurationPath) {
+    return configurationPath.buildPath("account.plist");
+}
+
+void saveAccountSession(string configurationPath, DeveloperSession session) {
+    auto log = getLogger();
+    try {
+        if (!file.exists(configurationPath)) {
+            file.mkdirRecurse(configurationPath);
+        }
+        auto path = accountSessionPath(configurationPath);
+        auto pl = dict(
+            "appleId", session.appleId().pl,
+            "adsid", session.accountIdentityId().pl,
+            "token", session.accountGsToken().pl,
+        );
+        file.write(path, pl.toXml());
+        version (Posix) {
+            import std.conv : octal;
+            file.setAttributes(path, octal!600);
+        }
+        log.infoF!"Saved Apple ID session for %s. Later installs can skip the password prompt."(session.appleId());
+    } catch (Exception e) {
+        log.warnF!"Could not save Apple ID session: %s"(e.msg);
+    }
+}
+
+DeveloperSession loadAccountSession(Device device, ADI adi, string configurationPath) {
+    auto log = getLogger();
+    auto path = accountSessionPath(configurationPath);
+    if (!file.exists(path)) {
+        return null;
+    }
+    try {
+        auto pl = Plist.fromXml(cast(string) file.read(path)).dict();
+        auto appleId = pl["appleId"].str().native();
+        auto adsid = pl["adsid"].str().native();
+        auto token = pl["token"].str().native();
+        log.infoF!"Restoring saved Apple ID session for %s..."(appleId);
+        auto session = DeveloperSession.restore(device, adi, appleId, adsid, token);
+        log.debug_("Checking saved session with Apple...");
+        auto ping = session.listTeams();
+        return ping.match!(
+            (DeveloperTeam[] _) {
+                log.info("Saved session is still valid.");
+                return session;
+            },
+            (DeveloperPortalError err) {
+                log.warnF!"Saved session is no longer valid (%s). You will need to log in again."(err.description);
+                file.remove(path);
+                return cast(DeveloperSession) null;
+            }
+        );
+    } catch (Exception e) {
+        log.warnF!"Could not restore Apple ID session: %s"(e.msg);
+        return null;
+    }
+}
+
+DeveloperSession login(Device device, ADI adi, bool interactive, string configurationPath) {
     auto log = getLogger();
 
     log.info("Logging in...");
 
-    DeveloperSession account;
+    if (auto saved = loadAccountSession(device, adi, configurationPath)) {
+        return saved;
+    }
 
-    // TODO Keyring stuff
-    // ...
-
-    if (account) return null;
     if (!interactive) {
-        log.error("You are not logged in. (use `sidestore login` to log-in, or add `-i` to make us ask you the account)");
+        log.error("You are not logged in. (add `-i` once to enter your Apple ID; it will be remembered afterwards)");
         return null;
     }
 
@@ -122,7 +179,7 @@ DeveloperSession login(Device device, ADI adi, bool interactive) {
     string appleId = readln().chomp();
     string password = readPasswordLine("Password: ");
 
-    return DeveloperSession.login(
+    auto session = DeveloperSession.login(
         device,
         adi,
         appleId,
@@ -140,12 +197,16 @@ DeveloperSession login(Device device, ADI adi, bool interactive) {
             } while (submitCode(code).match!((Success _) => false, (ReloginNeeded _) => false, (AppleLoginError _) => true));
         })
     .match!(
-        (DeveloperSession session) => session,
+        (DeveloperSession s) => s,
         (AppleLoginError error) {
             log.errorF!"Can't log-in! %s (%d)"(error.description, error);
-            return null;
+            return cast(DeveloperSession) null;
         }
     );
+    if (session) {
+        saveAccountSession(configurationPath, session);
+    }
+    return session;
 }
 
 auto initializeADI(string configurationPath)
@@ -209,7 +270,7 @@ mixin template LoginCommand()
     @(NamedArgument("i", "interactive").Description("Prompt to type passwords if needed."))
     bool interactive = false;
 
-    final auto login(Device device, ADI adi) => cli_frontend.login(device, adi, interactive);
+    final auto login(Device device, ADI adi) => cli_frontend.login(device, adi, interactive, systemConfigurationPath());
 }
 
 @(Command("version").Description("Print the version."))

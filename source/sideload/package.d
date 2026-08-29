@@ -215,8 +215,12 @@ void sideloadFull(
                     return;
                 }
 
+                ulong pct = 0;
+                if (auto pctNode = "PercentComplete" in status) {
+                    pct = pctNode.uinteger().native();
+                }
                 progressCallback(
-                    progress + (status["PercentComplete"].uinteger().native() / (400.0 * STEP_COUNT)),
+                    progress + (pct / (400.0 * STEP_COUNT)),
                     format!"Installing the application on the device (%s)"(statusEntry.str().native())
                 );
             } else {

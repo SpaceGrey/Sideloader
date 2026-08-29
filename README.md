@@ -6,6 +6,33 @@ Sideloader is an application made to install third-party applications on iOS dev
 
 You can see it as an open-source replacement of _Cydia Impactor_.
 
+## This fork (SpaceGrey)
+
+macOS 15 CLI fork of [Dadoum/Sideloader](https://github.com/Dadoum/Sideloader).
+Prebuilt binaries are on the [Releases](https://github.com/SpaceGrey/Sideloader/releases) page.
+
+What changed relative to upstream:
+
+- The first `-i` login is remembered (`account.plist` and `cert.pem` under `~/Library/Preferences/Sideloader/`). Later installs skip the password and reuse a matching Apple development certificate.
+- Install no longer crashes at ~99% (`SandboxingApplication`) or while restoring a saved session.
+- Signing defaults to a single thread (parallel botan hashing SIGSEGV on macOS 15 + LDC 1.41).
+- botan 1.13.6 and Provision are vendored with LDC 1.41 compile fixes.
+
+Build the macOS CLI:
+
+```sh
+curl -fsS https://dlang.org/install.sh | bash -s ldc-1.41.0
+./build-macos-cli.sh
+./sideloader --help
+```
+
+Install an IPA:
+
+```sh
+./sideloader install -i --udid <udid> app.ipa   # first time
+./sideloader install --udid <udid> app.ipa      # afterwards
+```
+
 <center>Leave a star and a small tip if you feel like it! — more information at the end!</center>
 
 ## Current state
@@ -74,7 +101,9 @@ Table of Contents
 
 ## How to install
 
-Currently, the only builds available can be downloaded through GitHub Actions.
+macOS 15 CLI builds for this fork are on
+[GitHub Releases](https://github.com/SpaceGrey/Sideloader/releases).
+Upstream CI artifacts remain on [Dadoum/Sideloader Actions](https://github.com/Dadoum/Sideloader/actions).
 
 CLI builds include builds for every supported operating system, and GTK+ builds have a GUI
 for Linux-based OSes.

@@ -4,6 +4,7 @@ docs.json
 __dummy.html
 docs/
 /bin/
+/lib/
 *.exe
 *.pdb
 *.o
@@ -22,3 +23,7 @@ docs/
 # Swift
 /swift/.build/
 /swift/Dependencies/SideloaderBackend.xcframework/Headers/sideloader-autogen.h
+
+# Vendored botan build products
+vendor/botan/build/
+vendor/botan/test_data/

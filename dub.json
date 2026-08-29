@@ -11,7 +11,7 @@
     "buildRequirements": ["allowWarnings", "requireBoundsCheck"],
 
     "dependencies": {
-        "botan": "~>1.13",
+        "botan": { "path": "vendor/botan" },
         "dynamic-loader": {
             "repository": "git+https://github.com/Dadoum/dynamicloader.git",
             "version": "9202b389affa6be0740e7295dea8f0146537a784"
@@ -21,10 +21,7 @@
             "repository": "git+https://github.com/Dadoum/libplist-d.git",
             "version": "6fdaa60d62bbf7c55044069e8f03cbe74401c444"
         },
-        "provision": {
-            "repository": "git+https://github.com/Dadoum/Provision.git",
-            "version": "645d56d8e8c86c057893321843db00b21f1aaeb2"
-        },
+        "provision": { "path": "vendor/provision" },
         "requests": "~>2.1",
         "slf4d": "~>2"
     },

@@ -45,31 +45,56 @@ class CertificateIdentity {
         }
 
         keyFile = keyPath.buildPath("key.pem");
+        auto certFile = keyPath.buildPath("cert.pem");
 
         rng = RandomNumberGenerator.makeRng();
 
         auto teams = appleAccount.listTeams().unwrap();
         auto team = teams[0];
 
+        void persistCertificate() {
+            try {
+                file.write(certFile, certificate.PEM_encode());
+                version (Posix) {
+                    import std.conv : octal;
+                    file.setAttributes(certFile, octal!600);
+                }
+                log.infoF!"Saved development certificate to %s"(certFile);
+            } catch (Exception e) {
+                log.warnF!"Could not save certificate: %s"(e.msg);
+            }
+        }
+
         if (file.exists(keyFile)) {
             log.debug_("A key has already been generated");
             privateKey = RSAPrivateKey(loadKey(keyFile, rng));
+            Vector!ubyte ourPublicKey = privateKey.x509SubjectPublicKey();
+
+            if (file.exists(certFile)) {
+                try {
+                    auto saved = X509Certificate(certFile, false);
+                    if (saved.subjectPublicKey().x509SubjectPublicKey() == ourPublicKey) {
+                        log.info("Using saved development certificate.");
+                        certificate = saved;
+                        return;
+                    }
+                    log.warn("Saved certificate does not match the private key; fetching a matching one.");
+                } catch (Exception e) {
+                    log.warnF!"Could not load saved certificate (%s); fetching a matching one."(e.msg);
+                }
+            }
 
             log.debug_("Checking if any certificate online is matching the private key...");
             auto certificates = appleAccount.listAllDevelopmentCerts!iOS(team).unwrap();
             auto sideloaderCertificates = certificates.find!((cert) => cert.machineName == applicationName);
-            if (sideloaderCertificates.length != 0) {
-                Vector!ubyte certContent;
-                Vector!ubyte ourPublicKey = privateKey.x509SubjectPublicKey();
-                foreach (cert; sideloaderCertificates) {
-                    certContent = Vector!ubyte(cert.certContent);
-                    auto x509cert = X509Certificate(certContent, false);
-                    if (x509cert.subjectPublicKey().x509SubjectPublicKey() == ourPublicKey) {
-                        log.debug_("Matching certificate found.");
-                        certificate = X509Certificate(Vector!ubyte(certContent), false);
-                        return;
-                    }
-                    // +/
+            foreach (cert; sideloaderCertificates) {
+                Vector!ubyte certContent = Vector!ubyte(cert.certContent);
+                auto x509cert = X509Certificate(certContent, false);
+                if (x509cert.subjectPublicKey().x509SubjectPublicKey() == ourPublicKey) {
+                    log.info("Reusing the development certificate already registered with this Apple ID.");
+                    certificate = X509Certificate(Vector!ubyte(cert.certContent), false);
+                    persistCertificate();
+                    return;
                 }
             }
         } else {
@@ -93,5 +118,6 @@ class CertificateIdentity {
         auto certificateId = appleAccount.submitDevelopmentCSR!iOS(team, certRequest.PEM_encode()).unwrap();
         auto appleCertificateInfo = appleAccount.listAllDevelopmentCerts!iOS(team).unwrap().find!((cert) => cert.certificateId == certificateId)[0];
         certificate = X509Certificate(Vector!ubyte(appleCertificateInfo.certContent), false);
+        persistCertificate();
     }
 }

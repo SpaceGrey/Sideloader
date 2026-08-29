@@ -179,6 +179,7 @@ public class LockdowndServiceDescriptor {
 
 public class InstallationProxyClient {
     instproxy_client_t handle;
+    void* installCbRoot;
 
     public this(iDevice device, LockdowndServiceDescriptor service) {
         instproxy_client_new(device.handle, service, &handle).assertSuccess();
@@ -190,12 +191,32 @@ public class InstallationProxyClient {
             StatusCallback cb;
         }
 
+        // libimobiledevice fires many status callbacks (Transfer … SandboxingApplication
+        // … Complete). The old code GC.removeRoot'd on the first one, so the delegate
+        // was collected and later callbacks SIGSEGV'd around 99%.
+        if (installCbRoot) {
+            GC.removeRoot(installCbRoot);
+            installCbRoot = null;
+        }
         auto cb = new CallbackC(statusCallback);
+        installCbRoot = cb;
         GC.addRoot(cb);
         instproxy_install(handle, packagePath.toStringz(), clientOptions.handle, (command_c, status_c, data) {
-            auto cb = (cast(CallbackC*) data);
-            GC.removeRoot(cb);
-            cb.cb(Plist.wrap(command_c, false), Plist.wrap(status_c, false));
+            import core.thread : thread_attachThis, thread_detachThis;
+            thread_attachThis();
+            // Detach when the native worker is done, otherwise druntime shutdown
+            // throws ThreadError ("Unable to suspend thread") after a successful install.
+            void detachQuietly() {
+                try {
+                    thread_detachThis();
+                } catch (Throwable) {}
+            }
+            try {
+                auto cb = (cast(CallbackC*) data);
+                cb.cb(Plist.wrap(command_c, false), Plist.wrap(status_c, false));
+            } finally {
+                detachQuietly();
+            }
         }, cb).assertSuccess();
     }
 
@@ -206,6 +227,10 @@ public class InstallationProxyClient {
     }
 
     ~this() {
+        if (installCbRoot) {
+            GC.removeRoot(installCbRoot);
+            installCbRoot = null;
+        }
         if (handle) { // it may be null if an exception has been thrown TODO: switch from a constructor to a static function to fix that.
             instproxy_client_free(handle).assertSuccess();
         }

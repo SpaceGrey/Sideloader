@@ -82,6 +82,18 @@ class DeveloperSession {
         this.appleAccount = appleAccount;
     }
 
+    string accountIdentityId() {
+        return appleAccount.identityId();
+    }
+
+    string accountGsToken() {
+        return appleAccount.gsToken();
+    }
+
+    static DeveloperSession restore(Device device, ADI adi, string appleId, string adsid, string token) {
+        return new DeveloperSession(AppleAccount.restoreFromTokens(XcodeApplicationInformation, device, adi, appleId, adsid, token));
+    }
+
     static DeveloperLoginResponse login(Device device, ADI adi, string appleId, string password, TFAHandlerDelegate tfaHandler) {
         auto log = getLogger();
         log.infoF!"Creating DeveloperSession for %s..."(appleId);

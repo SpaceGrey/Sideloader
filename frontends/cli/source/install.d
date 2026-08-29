@@ -25,7 +25,7 @@ struct InstallCommand
     string udid = null;
 
     @(NamedArgument("singlethread").Description("Run the signature process on a single thread. Sacrifices speed for more consistency."))
-    bool singlethreaded;
+    bool singlethreaded = true;
 
     int opCall()
     {

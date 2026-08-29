@@ -83,6 +83,21 @@ package class AppleAccount {
         return appleIdentifier;
     }
 
+    package string identityId() {
+        return adsid;
+    }
+
+    package string gsToken() {
+        return token;
+    }
+
+    package static AppleAccount restoreFromTokens(ApplicationInformation applicationInformation, Device device, ADI adi, string appleId, string adsid, string token) {
+        // GSA URL bag is only needed during password/2FA login. Developer portal
+        // calls use adsid + gsToken + anisette headers from Device/ADI.
+        string[string] urls;
+        return new AppleAccount(device, adi, applicationInformation, urls, appleId, adsid, token);
+    }
+
     package this(Device device, ADI adi, ApplicationInformation appInfo, string[string] urlBag, string appleId, string adsid, string token) {
         this.device = device;
         this.adi = adi;
@@ -501,7 +516,11 @@ package class AppleAccount {
             httpResponse = rq.get(url);
         }
 
-        auto response = Plist.fromXml(httpResponse.responseBody.data!string());
+        auto body = httpResponse.responseBody.data!string();
+        auto response = Plist.fromXml(body);
+        if (response is null) {
+            throw new Exception(format!"Apple returned a non-plist response (HTTP %s)"(httpResponse.code));
+        }
         getLogger().trace(response.toXml());
 
         return response;
