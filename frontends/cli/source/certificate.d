@@ -1,11 +1,18 @@
 module certificate;
 
 import std.algorithm;
+import std.algorithm.searching : countUntil;
 import std.array;
+import std.digest.sha;
 import std.exception;
+import file = std.file;
+import std.path;
+import std.process : execute;
 import std.stdio;
+import std.string : strip;
 import std.sumtype;
 import std.typecons;
+import std.uni;
 
 import slf4d;
 import slf4d.default_provider;
@@ -15,6 +22,7 @@ import botan.filters.data_src;
 
 import argparse;
 
+import plist;
 import server.developersession;
 
 import cli_frontend;
@@ -26,13 +34,133 @@ struct CertificateCommand
     {
         return cmd.match!(
                 (ListCerts cmd) => cmd(),
+                (HistoryCerts cmd) => cmd(),
                 (SubmitCert cmd) => cmd(),
                 (RevokeCert cmd) => cmd()
         );
     }
 
     @SubCommands
-    SumType!(ListCerts, SubmitCert, RevokeCert) cmd;
+    SumType!(ListCerts, HistoryCerts, SubmitCert, RevokeCert) cmd;
+}
+
+@(Command("history").Description("List locally saved signing certificates without logging in."))
+struct HistoryCerts
+{
+    @(NamedArgument("gsv").Description("Print a machine-readable certificate list for GSV."))
+    bool gsv = false;
+
+    private string teamIdFromCertificate(string certificatePath)
+    {
+        try {
+            auto result = execute(["/usr/bin/openssl", "x509", "-in", certificatePath, "-noout", "-subject"]);
+            if (result.status != 0) {
+                return null;
+            }
+            string marker = "OU = ";
+            auto start = result.output.countUntil(marker);
+            if (start < 0) {
+                marker = "/OU=";
+                start = result.output.countUntil(marker);
+            }
+            if (start < 0) {
+                return null;
+            }
+            auto organizationalUnit = result.output[start + marker.length .. $];
+            auto end = organizationalUnit.countUntil(",");
+            auto slashEnd = organizationalUnit.countUntil("/");
+            if (end < 0 || (slashEnd >= 0 && slashEnd < end)) {
+                end = slashEnd;
+            }
+            if (end >= 0) {
+                organizationalUnit = organizationalUnit[0 .. end];
+            }
+            auto teamId = organizationalUnit.strip();
+            if (teamId.length > 0) {
+                return teamId.idup;
+            }
+        } catch (Exception) {
+            // A malformed historical certificate should not prevent the user
+            // from choosing the explicit new-certificate path.
+        }
+        return null;
+    }
+
+    int opCall()
+    {
+        string configurationPath = systemConfigurationPath();
+        auto accountPath = configurationPath.buildPath("account.plist");
+        if (!file.exists(accountPath)) {
+            if (gsv) writeln("GSV_CERT_HISTORY\tNONE");
+            return 0;
+        }
+
+        string appleId;
+        try {
+            appleId = Plist.fromXml(cast(string) file.read(accountPath)).dict()["appleId"].str().native();
+        } catch (Exception) {
+            if (gsv) writeln("GSV_CERT_HISTORY\tNONE");
+            return 0;
+        }
+
+        auto accountHash = (cast(string) sha1Of(appleId).toHexString()).toLower();
+        auto keyPath = configurationPath.buildPath("keys").buildPath(accountHash);
+        auto identitiesPath = keyPath.buildPath("identities");
+        bool found = false;
+        bool[string] seenTeamIds;
+
+        void reportTeamCertificate(string teamId) {
+            if (teamId in seenTeamIds) {
+                return;
+            }
+            seenTeamIds[teamId] = true;
+            found = true;
+            if (gsv) {
+                writefln!"GSV_CERT_HISTORY\t%s"(teamId);
+            } else {
+                writefln!"Saved certificate for team `%s`."(teamId);
+            }
+        }
+
+        if (file.exists(identitiesPath)) {
+            foreach (entry; file.dirEntries(identitiesPath, file.SpanMode.shallow)) {
+                auto certificatePath = entry.name.buildPath("cert.pem");
+                if (entry.isDir && file.exists(certificatePath) && file.exists(entry.name.buildPath("key.pem"))) {
+                    reportTeamCertificate(baseName(entry.name));
+                }
+            }
+        }
+
+        // An earlier GSV build kept team certificates in this directory while
+        // sharing the legacy account-level private key. Keep those users visible
+        // to the new selector; signing will migrate the identity on first use.
+        auto transitionalCertificatesPath = keyPath.buildPath("certificates");
+        if (file.exists(transitionalCertificatesPath)) {
+            foreach (entry; file.dirEntries(transitionalCertificatesPath, file.SpanMode.shallow)) {
+                if (entry.isFile && extension(entry.name) == ".pem" && file.exists(keyPath.buildPath("key.pem"))) {
+                    reportTeamCertificate(stripExtension(baseName(entry.name)));
+                }
+            }
+        }
+
+        auto legacyCertificatePath = keyPath.buildPath("cert.pem");
+        if (file.exists(keyPath.buildPath("key.pem")) && file.exists(legacyCertificatePath)) {
+            found = true;
+            auto legacyTeamId = teamIdFromCertificate(legacyCertificatePath);
+            if (legacyTeamId != null) {
+                reportTeamCertificate(legacyTeamId);
+            } else if (gsv) {
+                writeln("GSV_CERT_HISTORY\tLEGACY");
+            } else {
+                writeln("Saved legacy certificate (team needs confirmation after login).");
+            }
+        }
+
+        if (!found && gsv) {
+            writeln("GSV_CERT_HISTORY\tNONE");
+        }
+        return 0;
+    }
 }
 
 @(Command("list").Description("List certificates."))

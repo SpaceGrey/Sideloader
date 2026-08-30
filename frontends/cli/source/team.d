@@ -35,6 +35,9 @@ struct ListTeams
 {
     mixin LoginCommand;
 
+    @(NamedArgument("gsv").Description("Print a machine-readable team list for GSV."))
+    bool gsv = false;
+
     int opCall()
     {
         auto log = getLogger();
@@ -51,10 +54,17 @@ struct ListTeams
             return 1;
         }
 
-        writeln("Teams:");
         auto teams = appleAccount.listTeams().unwrap();
+        if (gsv) {
+            foreach (team; teams) {
+                writefln!"GSV_TEAM\t%s\t%s\t%s"(team.teamId, team.membershipKind, team.name);
+            }
+            return 0;
+        }
+
+        writeln("Teams:");
         foreach (team; teams) {
-            writefln!" - `%s`, with ID `%s`."(team.name, team.teamId);
+            writefln!" - `%s`, with ID `%s` (%s)."(team.name, team.teamId, team.membershipKind);
         }
 
         return 0;

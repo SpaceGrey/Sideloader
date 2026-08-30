@@ -35,25 +35,47 @@ class CertificateIdentity {
         this.privateKey = privateKey;
     }
 
-    this(string configurationPath, DeveloperSession appleAccount) {
+    this(
+        string configurationPath,
+        DeveloperSession appleAccount,
+        DeveloperTeam team,
+        bool reuseExisting = true,
+        bool requireExisting = false,
+    ) {
         auto log = getLogger();
         scope(success) log.debug_("Certificate retrieved successfully.");
 
-        string keyPath = configurationPath.buildPath("keys").buildPath(sha1Of(appleAccount.appleId).toHexString().toLower());
-        if (!file.exists(keyPath)) {
-            file.mkdirRecurse(keyPath);
+        string accountKeyPath = configurationPath.buildPath("keys").buildPath(sha1Of(appleAccount.appleId).toHexString().toLower());
+        if (!file.exists(accountKeyPath)) {
+            file.mkdirRecurse(accountKeyPath);
         }
 
-        keyFile = keyPath.buildPath("key.pem");
-        auto certFile = keyPath.buildPath("cert.pem");
+        auto identitiesPath = accountKeyPath.buildPath("identities");
+        auto identityPath = identitiesPath.buildPath(team.teamId);
+        if (!file.exists(identityPath)) {
+            file.mkdirRecurse(identityPath);
+        }
+
+        keyFile = identityPath.buildPath("key.pem");
+        auto certFile = identityPath.buildPath("cert.pem");
+        auto legacyKeyFile = accountKeyPath.buildPath("key.pem");
+        auto legacyCertFile = accountKeyPath.buildPath("cert.pem");
 
         rng = RandomNumberGenerator.makeRng();
 
-        auto teams = appleAccount.listTeams().unwrap();
-        auto team = teams[0];
+        void persistKey() {
+            file.write(keyFile, botan.pubkey.pkcs8.PEM_encode(privateKey));
+            version (Posix) {
+                import std.conv : octal;
+                file.setAttributes(keyFile, octal!600);
+            }
+        }
 
         void persistCertificate() {
             try {
+                if (!file.exists(keyFile)) {
+                    persistKey();
+                }
                 file.write(certFile, certificate.PEM_encode());
                 version (Posix) {
                     import std.conv : octal;
@@ -65,29 +87,56 @@ class CertificateIdentity {
             }
         }
 
-        if (file.exists(keyFile)) {
-            log.debug_("A key has already been generated");
+        bool hasKey = false;
+        if (reuseExisting && file.exists(keyFile)) {
+            log.debug_("Using the saved key for this team.");
             privateKey = RSAPrivateKey(loadKey(keyFile, rng));
+            hasKey = true;
             Vector!ubyte ourPublicKey = privateKey.x509SubjectPublicKey();
 
             if (file.exists(certFile)) {
                 try {
                     auto saved = X509Certificate(certFile, false);
                     if (saved.subjectPublicKey().x509SubjectPublicKey() == ourPublicKey) {
-                        log.info("Using saved development certificate.");
+                        if (requireExisting) {
+                            log.info("Using the selected saved development certificate.");
+                            certificate = saved;
+                            return;
+                        }
+                        log.info("Found saved development certificate; verifying it with Apple.");
                         certificate = saved;
-                        return;
                     }
                     log.warn("Saved certificate does not match the private key; fetching a matching one.");
                 } catch (Exception e) {
                     log.warnF!"Could not load saved certificate (%s); fetching a matching one."(e.msg);
                 }
             }
+        } else if (reuseExisting && file.exists(legacyKeyFile)) {
+            log.debug_("Trying the legacy saved key for this team.");
+            privateKey = RSAPrivateKey(loadKey(legacyKeyFile, rng));
+            hasKey = true;
+            if (file.exists(legacyCertFile)) {
+                try {
+                    auto saved = X509Certificate(legacyCertFile, false);
+                    if (saved.subjectPublicKey().x509SubjectPublicKey() == privateKey.x509SubjectPublicKey()) {
+                        if (requireExisting) {
+                            log.info("Using the selected legacy development certificate.");
+                            certificate = saved;
+                            return;
+                        }
+                        certificate = saved;
+                    }
+                } catch (Exception e) {
+                    log.warnF!"Could not load the legacy certificate (%s); fetching a matching one."(e.msg);
+                }
+            }
+        }
 
+        if (reuseExisting && hasKey) {
             log.debug_("Checking if any certificate online is matching the private key...");
+            Vector!ubyte ourPublicKey = privateKey.x509SubjectPublicKey();
             auto certificates = appleAccount.listAllDevelopmentCerts!iOS(team).unwrap();
-            auto sideloaderCertificates = certificates.find!((cert) => cert.machineName == applicationName);
-            foreach (cert; sideloaderCertificates) {
+            foreach (cert; certificates) {
                 Vector!ubyte certContent = Vector!ubyte(cert.certContent);
                 auto x509cert = X509Certificate(certContent, false);
                 if (x509cert.subjectPublicKey().x509SubjectPublicKey() == ourPublicKey) {
@@ -97,11 +146,19 @@ class CertificateIdentity {
                     return;
                 }
             }
-        } else {
-            log.debug_("Generating a new RSA key");
-            privateKey = RSAPrivateKey(rng, 2048);
+        }
 
-            file.write(keyFile, botan.pubkey.pkcs8.PEM_encode(privateKey));
+        if (requireExisting) {
+            if (hasKey) {
+                throw new Exception("The selected saved certificate is no longer registered for this Apple Developer team. Choose a new certificate and try again.");
+            }
+            throw new Exception("The selected saved certificate no longer has its private key. Choose a new certificate and try again.");
+        }
+
+        if (!hasKey || !reuseExisting) {
+            log.debug_("Generating a new RSA key for this team.");
+            privateKey = RSAPrivateKey(rng, 2048);
+            persistKey();
         }
 
         X509CertOptions subject;

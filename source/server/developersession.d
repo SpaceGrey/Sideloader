@@ -144,8 +144,11 @@ class DeveloperSession {
 
         return sendRequest(developerPortal!"listTeams.action", request).match!(
                 (PlistDict dict) => DeveloperPortalResponse(dict["teams"].array().native().map!(
-                        (Plist teamPlist) =>
-                    DeveloperTeam(teamPlist["name"].str().native(), teamPlist["teamId"].str().native())
+                        (Plist teamPlist) => DeveloperTeam(
+                            teamPlist["name"].str().native(),
+                            teamPlist["teamId"].str().native(),
+                            membershipKind(teamPlist)
+                        )
                 ).array()),
             (DeveloperPortalError err) => DeveloperPortalResponse(err)
         );
@@ -483,6 +486,31 @@ string urlSegment(DeveloperDeviceType deviceType) {
 struct DeveloperTeam {
     string name;
     string teamId;
+    string membershipKind;
+}
+
+private string membershipKind(Plist teamPlist) {
+    auto team = teamPlist.dict();
+    if (!("memberships" in team)) {
+        return "unknown";
+    }
+
+    bool hasFreeMembership = false;
+    foreach (membership; teamPlist["memberships"].array()) {
+        auto record = membership.dict();
+        if (!("name" in record)) {
+            continue;
+        }
+
+        auto name = membership["name"].str().native();
+        if (name == "Apple Developer Program") {
+            return "paid";
+        }
+        if (name == "Xcode Free Provisioning Program") {
+            hasFreeMembership = true;
+        }
+    }
+    return hasFreeMembership ? "free" : "unknown";
 }
 
 struct DeveloperDevice {

@@ -6,6 +6,7 @@ import std.array;
 import std.concurrency;
 import std.conv;
 import std.datetime;
+import std.exception;
 import file = std.file;
 import std.format;
 import std.path;
@@ -33,15 +34,28 @@ void sideloadFull(
     Application app,
     void delegate(double progress, string action) progressCallback,
     bool isMultithreaded = false,
+    string selectedTeamId = null,
+    bool reuseCertificate = true,
+    bool requireSavedCertificate = false,
 ) {
     enum STEP_COUNT = 9.0;
     auto log = getLogger();
 
     bool isSideStore = app.bundleIdentifier() == "com.SideStore.SideStore";
 
-    // select the first development team
-    progressCallback(0 / STEP_COUNT, "Fetching development teams");
-    auto team = developer.listTeams().unwrap()[0]; // TODO add a setting for that
+    DeveloperTeam team;
+    if (selectedTeamId != null && requireSavedCertificate) {
+        progressCallback(0 / STEP_COUNT, "Using the selected saved signing team");
+        team = DeveloperTeam("", selectedTeamId, "unknown");
+    } else {
+        progressCallback(0 / STEP_COUNT, "Fetching development teams");
+        auto teams = developer.listTeams().unwrap();
+        if (selectedTeamId != null) {
+            teams = teams.filter!((candidate) => candidate.teamId == selectedTeamId).array();
+        }
+        enforce(teams.length > 0, "No matching Apple Developer team found.");
+        team = teams[0];
+    }
 
     // list development devices from the account
     progressCallback(1 / STEP_COUNT, "List account's development devices");
@@ -58,7 +72,7 @@ void sideloadFull(
 
     // create a certificate for the developer
     progressCallback(3 / STEP_COUNT, "Generating a certificate for Sideloader");
-    auto certIdentity = new CertificateIdentity(configurationPath, developer);
+    auto certIdentity = new CertificateIdentity(configurationPath, developer, team, reuseCertificate, requireSavedCertificate);
 
     // check if we registered an app id for it (if not create it)
     progressCallback(4 / STEP_COUNT, "Creating App IDs for the application");

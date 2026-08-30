@@ -5,6 +5,8 @@ import slf4d.default_provider;
 
 import argparse;
 import progress;
+import std.exception;
+import std.stdio : writefln;
 
 import imobiledevice;
 
@@ -24,11 +26,24 @@ struct InstallCommand
     @(NamedArgument("udid").Description("UDID of the device (if multiple are available)."))
     string udid = null;
 
+    @(NamedArgument("team").Description("Apple Developer Team ID to use for signing."))
+    string teamId = null;
+
+    @(NamedArgument("new-certificate").Description("Create a new signing certificate instead of reusing a saved one."))
+    bool newCertificate = false;
+
+    @(NamedArgument("reuse-certificate").Description("Require the saved certificate for the selected team; do not create a replacement."))
+    bool reuseCertificate = false;
+
+    @(NamedArgument("gsv").Description("Emit machine-readable progress events for the GSV user interface."))
+    bool gsv = false;
+
     @(NamedArgument("singlethread").Description("Run the signature process on a single thread. Sacrifices speed for more consistency."))
     bool singlethreaded = true;
 
     int opCall()
     {
+        enforce(!(newCertificate && reuseCertificate), "--new-certificate and --reuse-certificate cannot be used together.");
         Application app = openApp(appPath);
 
         auto log = getLogger();
@@ -63,15 +78,24 @@ struct InstallCommand
 
         log.infoF!"Initiating connection the device (UUID: %s)"(udid);
         auto device = new iDevice(udid);
-        Bar progressBar = new Bar();
+        Bar progressBar;
         string message;
-        progressBar.message = () => message;
+        if (!gsv) {
+            progressBar = new Bar();
+            progressBar.message = () => message;
+        }
         sideloadFull(configurationPath, device, appleAccount, app, (progress, action) {
-            message = action;
-            progressBar.index = cast(int) (progress * 100);
-            progressBar.update();
-        }, !singlethreaded);
-        progressBar.finish();
+            if (gsv) {
+                writefln!"GSV_PROGRESS\t%d\t%s"(cast(int) (progress * 100), action);
+            } else {
+                message = action;
+                progressBar.index = cast(int) (progress * 100);
+                progressBar.update();
+            }
+        }, !singlethreaded, teamId, !newCertificate, reuseCertificate);
+        if (!gsv) {
+            progressBar.finish();
+        }
 
         return 0;
     }
